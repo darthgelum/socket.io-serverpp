@@ -17,6 +17,7 @@
 #include <boost/regex.hpp>
 #include <cctype>
 #include <map>
+#include <chrono>
 
 namespace SOCKETIO_SERVERPP_NAMESPACE
 {
@@ -152,12 +153,16 @@ class Server
         // Engine.IO v4: upon WebSocket open, send OPEN packet (type '0') with handshake data
         // We run in WebSocket-only mode, so upgrades is empty
         m_conn_sid[hdl] = uuid; // store per-connection SID
+    // initialize heartbeat tracking and schedule first ping
+    m_last_pong[hdl] = std::chrono::steady_clock::now();
         std::ostringstream os;
         os << "0";
         os << "{\"sid\":\"" << uuid << "\",\"upgrades\":[],\"pingInterval\":"
            << m_pingInterval << ",\"pingTimeout\":" << m_pingTimeout << ",\"maxPayload\":"
            << m_maxPayload << "}";
         m_wsserver.send(hdl, os.str(), wspp::frame::opcode::value::text);
+
+    schedule_ping(hdl);
     }
 
     /*
@@ -182,15 +187,19 @@ class Server
         char eio_type = payload[0];
         // Engine.IO v4 handling
         switch (eio_type) {
-            case '2': // ping (may be '2' or '2probe')
+        case '2': // ping (may be '2' or '2probe')
                 if (payload == "2probe") {
                     m_wsserver.send(hdl, "3probe", wspp::frame::opcode::value::text); // pong probe
                 } else {
-                    m_wsserver.send(hdl, "3", wspp::frame::opcode::value::text); // pong
+            // If client pings (not typical in v4), answer with pong and refresh liveness
+                    m_wsserver.send(hdl, "3", wspp::frame::opcode::value::text);
+            m_last_pong[hdl] = std::chrono::steady_clock::now();
                 }
                 return;
-            case '3': // pong from client, ignore
+            case '3': { // pong from client
+                m_last_pong[hdl] = std::chrono::steady_clock::now();
                 return;
+            }
             case '1': // close
                 onWebsocketClose(hdl);
                 return;
@@ -285,9 +294,52 @@ class Server
         {
             sns.second->onSocketIoDisconnect(hdl);
         }
+
+        // cleanup heartbeat resources
+        auto t = m_ping_timers.find(hdl);
+        if (t != m_ping_timers.end()) {
+            if (t->second) {
+                boost::system::error_code ec;
+                t->second->cancel(ec);
+            }
+            m_ping_timers.erase(t);
+        }
+        m_last_pong.erase(hdl);
+        m_conn_sid.erase(hdl);
     }
 
 private:
+    void schedule_ping(wspp::connection_hdl hdl)
+    {
+        // Reuse a single timer per connection
+        auto& ref = m_ping_timers[hdl];
+        if (!ref) {
+            ref = std::make_shared<asio::steady_timer>(m_io_service);
+        }
+        auto timer = ref;
+        timer->expires_after(std::chrono::milliseconds(m_pingInterval));
+        timer->async_wait([this, hdl](const boost::system::error_code& ec){
+            if (ec) return; // canceled
+            // Check timeout based on last pong
+            auto it = m_last_pong.find(hdl);
+            if (it != m_last_pong.end()) {
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second).count();
+                if (elapsed > (m_pingInterval + m_pingTimeout)) {
+                    try {
+                        m_wsserver.close(hdl, websocketpp::close::status::normal, "ping timeout");
+                    } catch (...) {}
+                    return;
+                }
+            }
+            // send ping
+            try {
+                m_wsserver.send(hdl, "2", wspp::frame::opcode::value::text);
+            } catch (...) { return; }
+            // schedule next tick
+            schedule_ping(hdl);
+        });
+    }
     asio::io_service&   m_io_service;
     wsserver            m_wsserver;
     scgiserver          m_scgiserver;
@@ -303,6 +355,9 @@ private:
     int                 m_maxPayload = 1000000;
     // Per-connection Engine.IO session id
     map<wspp::connection_hdl, string, std::owner_less<wspp::connection_hdl>> m_conn_sid;
+    // Heartbeat
+    map<wspp::connection_hdl, std::shared_ptr<asio::steady_timer>, std::owner_less<wspp::connection_hdl>> m_ping_timers;
+    map<wspp::connection_hdl, std::chrono::steady_clock::time_point, std::owner_less<wspp::connection_hdl>> m_last_pong;
 };
 
 }
