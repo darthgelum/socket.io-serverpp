@@ -1,10 +1,12 @@
-#pragma once
+#include <memory>
+#ifndef SOCKETIO_SERVERPP_SOCKETNAMESPACE_HPP
+#define SOCKETIO_SERVERPP_SOCKETNAMESPACE_HPP
 
-#include <socket.io-serverpp/config.hpp>
-#include <socket.io-serverpp/Server.hpp>
-#include <socket.io-serverpp/Socket.hpp>
+#include "config.hpp"
+#include "Server.hpp"
+#include "Socket.hpp"
 
-#include <socket.io-serverpp/lib/rapidjson/document.h>
+#include "lib/rapidjson/document.h"
 
 namespace SOCKETIO_SERVERPP_NAMESPACE
 {
@@ -24,18 +26,18 @@ class SocketNamespace
     {
     }
 
-    void onConnection(function<void (Socket&)> cb)
+    void onConnection(std::function<void (Socket&)> cb)
     {
         sig_Connection.connect(cb);
     }
 
-    void onDisconnection(function<void (Socket&)> cb)
+    void onDisconnection(std::function<void (Socket&)> cb)
     {
         sig_Disconnection.connect(cb);
     }
 
 #if 0
-    void on(const string& event, function<void (const string&)> cb)
+    void on(const string& event, std::function<void (const string&)> cb)
     {
         // add cb to event-signal
         //m_events[event]; //.connect(cb);
@@ -71,7 +73,7 @@ class SocketNamespace
 
     void onSocketIoConnection(wspp::connection_hdl hdl)
     {
-        auto socket = make_shared<Socket>(m_wsserver, m_namespace, hdl);
+    auto socket = std::make_shared<Socket>(m_wsserver, m_namespace, hdl);
         m_sockets[hdl] = socket;
         sig_Connection(*socket);
     }
@@ -100,7 +102,23 @@ class SocketNamespace
         auto iter = m_sockets.find(hdl);
         if (iter != m_sockets.end())
         {
+            // First, deliver to the sending socket's event handlers
             iter->second->onEvent(name, json, msg.data);
+            
+            // Then broadcast to ALL other connected sockets in this namespace
+            // This is what makes multi-tab chat work
+            for (const auto& socket_pair : m_sockets)
+            {
+                // Don't send back to sender - compare the handles directly
+                if (!socket_pair.first.owner_before(hdl) && !hdl.owner_before(socket_pair.first))
+                {
+                    continue; // This is the sender, skip
+                }
+                
+                // Re-broadcast the exact same event to other clients
+                string payload = "5::" + m_namespace + ":" + msg.data;
+                m_wsserver.send(socket_pair.first, payload, wspp::frame::opcode::value::text);
+            }
         }
 
     }
@@ -120,9 +138,11 @@ class SocketNamespace
 
     signal<void (Socket&)> sig_Connection;
     signal<void (Socket&)> sig_Disconnection;
-    map<wspp::connection_hdl, shared_ptr<Socket>, std::owner_less<wspp::connection_hdl>> m_sockets;
+    map<wspp::connection_hdl, std::shared_ptr<Socket>, std::owner_less<wspp::connection_hdl>> m_sockets;
 };
 
 }
     using lib::SocketNamespace;
 }
+
+#endif // SOCKETIO_SERVERPP_SOCKETNAMESPACE_HPP

@@ -1,12 +1,18 @@
-#pragma once
+#include <functional>
+#include <memory>
+#ifndef SOCKETIO_SERVERPP_SERVER_HPP
+#define SOCKETIO_SERVERPP_SERVER_HPP
 
-#include <socket.io-serverpp/config.hpp>
-#include <socket.io-serverpp/scgi/Service.h>
-#include <socket.io-serverpp/Message.hpp>
-#include <socket.io-serverpp/SocketNamespace.hpp>
-#include <socket.io-serverpp/uuid.hpp>
+#include "config.hpp"
+#include "scgi/Service.h"
+#include "Message.hpp"
+#include "SocketNamespace.hpp"
+#include "uuid.hpp"
 
 #include <sstream>
+#include <map>
+#include <vector>
+#include <string>
 
 #include <boost/regex.hpp>
 
@@ -18,6 +24,10 @@ namespace lib
 class SocketNamespace;
 
 typedef scgi::Service<asio::local::stream_protocol> scgiserver;
+
+using std::map;
+using std::vector;
+using std::string;
 
 class Server
 {
@@ -33,11 +43,11 @@ class Server
         m_wsserver.init_asio(&io_service);
         m_wsserver.set_access_channels(websocketpp::log::alevel::none);
         m_wsserver.set_error_channels(websocketpp::log::elevel::warn);
-        m_wsserver.set_message_handler(bind(&Server::onWebsocketMessage, this, _1, _2));
-        m_wsserver.set_open_handler(bind(&Server::onWebsocketOpen, this, _1));
-        m_wsserver.set_close_handler(bind(&Server::onWebsocketClose, this, _1));
+    m_wsserver.set_message_handler(std::bind(&Server::onWebsocketMessage, this, std::placeholders::_1, std::placeholders::_2));
+    m_wsserver.set_open_handler(std::bind(&Server::onWebsocketOpen, this, std::placeholders::_1));
+    m_wsserver.set_close_handler(std::bind(&Server::onWebsocketClose, this, std::placeholders::_1));
         
-        m_scgiserver.sig_RequestReceived.connect(bind(&Server::onScgiRequest, this, _1));
+    m_scgiserver.sig_RequestReceived.connect(std::bind(&Server::onScgiRequest, this, std::placeholders::_1));
     }
 
     void listen(const string& scgi_socket, int websocket_port)
@@ -50,12 +60,12 @@ class Server
         m_wsserver.start_accept();
     }
 
-    shared_ptr<SocketNamespace> of(const string& nsp)
+    std::shared_ptr<SocketNamespace> of(const string& nsp)
     {
         auto iter = m_socket_namespace.find(nsp);
         if (iter == m_socket_namespace.end())
         {
-            auto snsp = make_shared<SocketNamespace>(nsp, m_wsserver);
+                auto snsp = std::make_shared<SocketNamespace>(nsp, m_wsserver);
             m_socket_namespace.insert(std::make_pair(nsp, snsp));
             return snsp;
         }
@@ -65,9 +75,14 @@ class Server
         }
     }
 
-    shared_ptr<SocketNamespace> sockets()
+    std::shared_ptr<SocketNamespace> sockets()
     {
         return m_sockets;
+    }
+
+    void run()
+    {
+        m_io_service.run();
     }
 
     private:
@@ -102,7 +117,16 @@ class Server
     void onWebsocketOpen(wspp::connection_hdl hdl)
     {
         auto connection = m_wsserver.get_con_from_hdl(hdl);
-        string uuid = connection->get_resource().substr(23);
+        string resource = connection->get_resource();
+        string uuid;
+        
+        // Extract UUID from resource path, with bounds checking
+        if (resource.length() > 23) {
+            uuid = resource.substr(23);
+        } else {
+            // Generate a new UUID if the resource doesn't contain one
+            uuid = lib::uuid::uuid1();
+        }
 
         //m_websocketServer.send(hdl, "5::{name:'connect', args={}}", ws::frame::opcode::value::text);
         m_wsserver.send(hdl, "1::", wspp::frame::opcode::value::text);
@@ -180,14 +204,14 @@ class Server
         {
             sns.second->onSocketIoDisconnect(hdl);
         }
-
     }
 
+private:
     asio::io_service&   m_io_service;
     wsserver            m_wsserver;
     scgiserver          m_scgiserver;
-    shared_ptr<SocketNamespace> m_sockets;
-    map<string, shared_ptr<SocketNamespace>> m_socket_namespace;
+    std::shared_ptr<SocketNamespace> m_sockets;
+    map<string, std::shared_ptr<SocketNamespace>> m_socket_namespace;
     boost::regex        m_reSockIoMsg;
     int                 m_heartBeat = 30;
     int                 m_closeTime = 30;
@@ -195,6 +219,7 @@ class Server
 };
 
 }
-
     using lib::Server;
 }
+
+#endif // SOCKETIO_SERVERPP_SERVER_HPP

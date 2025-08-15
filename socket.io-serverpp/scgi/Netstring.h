@@ -1,4 +1,5 @@
-#pragma once
+#ifndef SOCKETIO_SERVERPP_SCGI_NETSTRING_H
+#define SOCKETIO_SERVERPP_SCGI_NETSTRING_H
 
 #include <string>
 #include <boost/lexical_cast.hpp>
@@ -61,3 +62,5 @@ namespace utils {
         return Netstring<T>(input);
     }
 }
+
+#endif // SOCKETIO_SERVERPP_SCGI_NETSTRING_H

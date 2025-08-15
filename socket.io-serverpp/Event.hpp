@@ -1,9 +1,10 @@
-#pragma once
+#ifndef SOCKETIO_SERVERPP_EVENT_HPP
+#define SOCKETIO_SERVERPP_EVENT_HPP
 
-#include <socket.io-serverpp/config.hpp>
-#include <socket.io-serverpp/Message.hpp>
+#include "config.hpp"
+#include "Message.hpp"
 
-#include <socket.io-serverpp/lib/rapidjson/document.h>
+#include "lib/rapidjson/document.h"
 
 namespace SOCKETIO_SERVERPP_NAMESPACE
 {
@@ -49,3 +50,5 @@ class Event
 using lib::Event;
 
 }
+
+#endif // SOCKETIO_SERVERPP_EVENT_HPP

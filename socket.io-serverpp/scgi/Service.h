@@ -1,8 +1,9 @@
-#pragma once
+#ifndef SOCKETIO_SERVERPP_SCGI_SERVICE_H
+#define SOCKETIO_SERVERPP_SCGI_SERVICE_H
 
 #include <boost/asio.hpp>
-#include <socket.io-serverpp/scgi/Netstring.h>
-#include <socket.io-serverpp/scgi/Request.h>
+#include "Netstring.h"
+#include "Request.h"
 #include <memory>
 
 namespace scgi
@@ -33,9 +34,10 @@ class Service
         
         void start_accept()
         {
-            auto request = std::make_shared<CRequest>(m_acceptor->get_io_service());
+            auto& io_context = static_cast<boost::asio::io_context&>(m_acceptor->get_executor().context());
+            auto request = std::make_shared<CRequest>(io_context);
 
-            m_acceptor->async_accept(request->socket(), bind(&Service::onAccept, this, request, P::_1));
+            m_acceptor->async_accept(request->socket(), std::bind(&Service::onAccept, this, request, std::placeholders::_1));
         }
 
         S::signal<void (CRequestPtr)> sig_RequestReceived;
@@ -50,9 +52,12 @@ class Service
             }
         }
 
-        shared_ptr<typename PROTOCOL::acceptor> m_acceptor;
+    private:
+        std::shared_ptr<typename PROTOCOL::acceptor> m_acceptor;
 };
 //}; // Namespace Internal
 
 //    using Internal::Service;
 };
+
+#endif // SOCKETIO_SERVERPP_SCGI_SERVICE_H

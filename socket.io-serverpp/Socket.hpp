@@ -1,10 +1,10 @@
 #pragma once
 
-#include <socket.io-serverpp/config.hpp>
-#include <socket.io-serverpp/Message.hpp>
-#include <socket.io-serverpp/Event.hpp>
+#include "config.hpp"
+#include "Message.hpp"
+#include "Event.hpp"
 
-#include <socket.io-serverpp/lib/rapidjson/document.h>
+#include "lib/rapidjson/document.h"
 
 namespace SOCKETIO_SERVERPP_NAMESPACE
 {
@@ -24,14 +24,14 @@ class Socket
     {
     }
 
-    void on(const std::string& event, function<void (const Event& data)> cb)
+    void on(const std::string& event, std::function<void (const Event& data)> cb)
     {
 //        cout << "register event '" << event << "'" << this << endl;
         m_events[event] = cb;
     }
 
 /*
-    void on(const std::string& event, function<void (const string& from, const string& data)> cb)
+    void on(const std::string& event, std::function<void (const string& from, const string& data)> cb)
     {
     }
     */
@@ -79,7 +79,7 @@ class Socket
     wsserver&               m_wsserver;
     const string&           m_namespace;
     wspp::connection_hdl    m_ws_hdl;
-    map<string, function<void (const Event&)>> m_events;
+    map<string, std::function<void (const Event&)>> m_events;
 };
 
 }
