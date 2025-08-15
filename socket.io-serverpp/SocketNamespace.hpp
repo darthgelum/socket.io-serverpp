@@ -93,30 +93,30 @@ class SocketNamespace
         rapidjson::Document json;
         json.Parse<0>(msg.data.c_str());
 
-        string name = json["name"].GetString();
-//        string args = json["args"].GetString();
-        string args;
+        // v5 EVENT payload is an array: [name, ...args]
+        string name;
+        if (json.IsArray() && json.Size() >= 1 && json[0u].IsString()) {
+            name = json[0u].GetString();
+        }
 
 //        cout << "SocketNamespace(" << m_namespace << ") event: " << name << " with args " << args << endl;
 
         auto iter = m_sockets.find(hdl);
         if (iter != m_sockets.end())
         {
-            // First, deliver to the sending socket's event handlers
+            // Deliver to sender's handlers
             iter->second->onEvent(name, json, msg.data);
-            
-            // Then broadcast to ALL other connected sockets in this namespace
-            // This is what makes multi-tab chat work
+
+            // Broadcast to other sockets in namespace using v5 framing
             for (const auto& socket_pair : m_sockets)
             {
-                // Don't send back to sender - compare the handles directly
+                // Skip sender
                 if (!socket_pair.first.owner_before(hdl) && !hdl.owner_before(socket_pair.first))
-                {
-                    continue; // This is the sender, skip
-                }
-                
-                // Re-broadcast the exact same event to other clients
-                string payload = "5::" + m_namespace + ":" + msg.data;
+                    continue;
+
+                std::string payload = "42"; // Engine.IO message + EVENT
+                if (!m_namespace.empty()) payload += m_namespace + ",";
+                payload += msg.data; // already JSON array
                 m_wsserver.send(socket_pair.first, payload, wspp::frame::opcode::value::text);
             }
         }

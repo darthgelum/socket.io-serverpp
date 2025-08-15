@@ -15,6 +15,8 @@
 #include <string>
 
 #include <boost/regex.hpp>
+#include <cctype>
+#include <map>
 
 namespace SOCKETIO_SERVERPP_NAMESPACE
 {
@@ -86,6 +88,27 @@ class Server
     }
 
     private:
+    // Extract a query parameter from a resource string like "/socket.io/?EIO=4&transport=websocket&sid=ABC"
+    static string get_query_param(const string& resource, const string& key)
+    {
+        auto qpos = resource.find('?');
+        if (qpos == string::npos) return string();
+        auto query = resource.substr(qpos + 1);
+        size_t pos = 0;
+        while (pos < query.size()) {
+            auto amp = query.find('&', pos);
+            auto part = query.substr(pos, amp == string::npos ? string::npos : amp - pos);
+            auto eq = part.find('=');
+            string k = (eq == string::npos) ? part : part.substr(0, eq);
+            if (k == key) {
+                return (eq == string::npos) ? string() : part.substr(eq + 1);
+            }
+            if (amp == string::npos) break;
+            pos = amp + 1;
+        }
+        return string();
+    }
+
     void onScgiRequest(scgiserver::CRequestPtr req)
     {
         string uri = req->header("REQUEST_URI");
@@ -120,19 +143,21 @@ class Server
         string resource = connection->get_resource();
         string uuid;
         
-        // Extract UUID from resource path, with bounds checking
-        if (resource.length() > 23) {
-            uuid = resource.substr(23);
-        } else {
-            // Generate a new UUID if the resource doesn't contain one
+        // Prefer sid from query string if provided (e.g. reconnect), otherwise generate a new one
+        uuid = get_query_param(resource, "sid");
+        if (uuid.empty()) {
             uuid = lib::uuid::uuid1();
         }
 
-        //m_websocketServer.send(hdl, "5::{name:'connect', args={}}", ws::frame::opcode::value::text);
-        m_wsserver.send(hdl, "1::", wspp::frame::opcode::value::text);
-        
-        //    m_websocketServer.set_timer(10*1000, bind(&SocketIoServer::sendHeartbeart, this, hdl));
-        //    m_websocketServer.set_timer(1*1000, bind(&SocketIoServer::customEvent, this, hdl));
+        // Engine.IO v4: upon WebSocket open, send OPEN packet (type '0') with handshake data
+        // We run in WebSocket-only mode, so upgrades is empty
+        m_conn_sid[hdl] = uuid; // store per-connection SID
+        std::ostringstream os;
+        os << "0";
+        os << "{\"sid\":\"" << uuid << "\",\"upgrades\":[],\"pingInterval\":"
+           << m_pingInterval << ",\"pingTimeout\":" << m_pingTimeout << ",\"maxPayload\":"
+           << m_maxPayload << "}";
+        m_wsserver.send(hdl, os.str(), wspp::frame::opcode::value::text);
     }
 
     /*
@@ -152,50 +177,106 @@ class Server
     void onWebsocketMessage(wspp::connection_hdl hdl, wsserver::message_ptr msg)
     {
         string payload = msg->get_payload();
-        if (payload.size() < 3)
-            return;
+        if (payload.empty()) return;
 
-        boost::smatch match;
-        if (boost::regex_match(payload, match, m_reSockIoMsg))
-        {
-            Message message = {
-                false,
-                "",
-                payload[0] - '0',
-                0,
-                false,
-                match[3],
-                match[4]
-            };
-                        
-            auto socket_namespace = m_socket_namespace.find(message.endpoint);
-            if (socket_namespace == m_socket_namespace.end())
-            {
-                std::cout << "socketnamespace '" << message.endpoint << "' not found" << std::endl;
+        char eio_type = payload[0];
+        // Engine.IO v4 handling
+        switch (eio_type) {
+            case '2': // ping (may be '2' or '2probe')
+                if (payload == "2probe") {
+                    m_wsserver.send(hdl, "3probe", wspp::frame::opcode::value::text); // pong probe
+                } else {
+                    m_wsserver.send(hdl, "3", wspp::frame::opcode::value::text); // pong
+                }
                 return;
-            }
+            case '3': // pong from client, ignore
+                return;
+            case '1': // close
+                onWebsocketClose(hdl);
+                return;
+            case '4': // message (Socket.IO payload)
+                break;
+            default:
+                // unsupported Engine.IO packet type
+                return;
+        }
 
-            switch(payload[0])
-            {
-                case '0': // Disconnect
-                    break;
-                case '1': // Connect
-                    // signal connect to matching namespace
-                    socket_namespace->second->onSocketIoConnection(hdl);
-                    m_wsserver.send(hdl, payload, wspp::frame::opcode::value::text);
-                    break;
-                case '4': // JsonMessage
-                    message.isJson = true;
-                    // falltrough
-                case '3': // Message
-                    socket_namespace->second->onSocketIoMessage(hdl, message);
-                    break;
-                case '5': // Event
-                    socket_namespace->second->onSocketIoEvent(hdl, message);
-                    break;
+        // Socket.IO v5 framing inside Engine.IO message
+        string sio = payload.substr(1);
+        if (sio.empty()) return;
+
+        int pkt_type = sio[0] - '0';
+        size_t idx = 1;
+        string nsp;
+        // optional namespace (starts with '/')
+        if (idx < sio.size() && sio[idx] == '/') {
+            size_t comma = sio.find(',', idx);
+            if (comma != string::npos) {
+                nsp = sio.substr(idx, comma - idx);
+                idx = comma + 1;
+            } else {
+                nsp = sio.substr(idx);
+                idx = sio.size();
             }
         }
-        //std::cout << msg->get_payload() << std::endl;
+
+        // optional ack id (digits) - skip for now
+        while (idx < sio.size() && isdigit(static_cast<unsigned char>(sio[idx]))) ++idx;
+
+        string data = (idx < sio.size()) ? sio.substr(idx) : string();
+
+        auto socket_namespace = m_socket_namespace.find(nsp);
+        if (socket_namespace == m_socket_namespace.end()) {
+            // create on demand for default namespace
+            if (nsp.empty()) {
+                socket_namespace = m_socket_namespace.find("");
+            } else {
+                std::cout << "socketnamespace '" << nsp << "' not found" << std::endl;
+            }
+        }
+
+        switch (pkt_type) {
+            case 0: { // CONNECT
+                if (socket_namespace != m_socket_namespace.end()) {
+                    socket_namespace->second->onSocketIoConnection(hdl);
+                    // respond CONNECT with sid
+                    string sid;
+                    auto it = m_conn_sid.find(hdl);
+                    sid = (it != m_conn_sid.end()) ? it->second : lib::uuid::uuid1();
+                    std::ostringstream resp;
+                    resp << "40";
+                    if (!nsp.empty()) resp << nsp << ",";
+                    resp << "{\"sid\":\"" << sid << "\"}";
+                    m_wsserver.send(hdl, resp.str(), wspp::frame::opcode::value::text);
+                } else {
+                    std::ostringstream resp;
+                    resp << "44"; // CONNECT_ERROR
+                    if (!nsp.empty()) resp << nsp << ",";
+                    resp << "{\"message\":\"Namespace not found\"}";
+                    m_wsserver.send(hdl, resp.str(), wspp::frame::opcode::value::text);
+                }
+                break;
+            }
+            case 1: { // DISCONNECT
+                if (socket_namespace != m_socket_namespace.end()) {
+                    socket_namespace->second->onSocketIoDisconnect(hdl);
+                }
+                break;
+            }
+            case 2: { // EVENT
+                if (socket_namespace != m_socket_namespace.end()) {
+                    Message message = { false, "", 2, 0, false, nsp, data };
+                    socket_namespace->second->onSocketIoEvent(hdl, message);
+                }
+                break;
+            }
+            case 3: // ACK (not implemented)
+            case 4: // CONNECT_ERROR (server shouldn't receive)
+            case 5: // BINARY_EVENT (not implemented)
+            case 6: // BINARY_ACK (not implemented)
+            default:
+                break;
+        }
     }
 
     void onWebsocketClose(wspp::connection_hdl hdl)
@@ -216,6 +297,12 @@ private:
     int                 m_heartBeat = 30;
     int                 m_closeTime = 30;
     vector<string>      m_protocols;
+    // Engine.IO v4 settings (WebSocket-only)
+    int                 m_pingInterval = 25000;
+    int                 m_pingTimeout = 5000;
+    int                 m_maxPayload = 1000000;
+    // Per-connection Engine.IO session id
+    map<wspp::connection_hdl, string, std::owner_less<wspp::connection_hdl>> m_conn_sid;
 };
 
 }

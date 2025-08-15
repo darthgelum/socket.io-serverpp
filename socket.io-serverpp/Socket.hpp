@@ -38,14 +38,24 @@ class Socket
     
     void send(const string& data)
     {
-        string pl = "3::" + m_namespace + ":" + data;
+        // Socket.IO v5: EVENT packet with raw payload array or string
+        string pl = "42"; // 4 = Engine.IO message, 2 = Socket.IO EVENT
+        if (!m_namespace.empty()) {
+            pl += m_namespace + ",";
+        }
+        pl += data; // caller must pass a valid JSON (e.g. ["event", ...])
         m_wsserver.send(m_ws_hdl, pl, wspp::frame::opcode::value::text);
 //        cout << "Socket send: " << data << endl;
     }
 
     void emit(const string& name, const string& data)
     {
-        string pl = "5::" + m_namespace + ":{\"name\":\"" + name + "\",\"args\":["+data+"]}";
+        // Socket.IO v5: EVENT packet with [name, ...args]
+        string pl = "42"; // 4 + 2
+        if (!m_namespace.empty()) {
+            pl += m_namespace + ",";
+        }
+        pl += "[\"" + name + "\"," + data + "]";
         m_wsserver.send(m_ws_hdl, pl, wspp::frame::opcode::value::text);
 //        cout << "Socket emit: " << name << " data: " << data << endl;
     }
