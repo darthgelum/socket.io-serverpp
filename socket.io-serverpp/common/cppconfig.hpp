@@ -1,4 +1,7 @@
-#pragma once
+#include <functional>
+#include <utility>
+#ifndef SOCKETIO_SERVERPP_CPPCONFIG_HPP
+#define SOCKETIO_SERVERPP_CPPCONFIG_HPP
 
 #include <map>
 #include <vector>
@@ -33,11 +36,13 @@ using std::make_shared;
 
 #else
 
-using boost::function;
-using boost::bind;
-using boost::ref;
+using std::function;
+using std::bind;
+using std::ref;
 
 #endif
 
 }
 }
+
+#endif // SOCKETIO_SERVERPP_CPPCONFIG_HPP

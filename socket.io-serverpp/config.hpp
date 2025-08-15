@@ -1,8 +1,9 @@
-#pragma once
+#ifndef SOCKETIO_SERVERPP_CONFIG_HPP
+#define SOCKETIO_SERVERPP_CONFIG_HPP
 
 #define SOCKETIO_SERVERPP_NAMESPACE socketio_serverpp
 
-#include <socket.io-serverpp/common/cppconfig.hpp>
+#include "common/cppconfig.hpp"
 
 #define _WEBSOCKETPP_CPP11_STL_
 #include <websocketpp/config/asio_no_tls.hpp>
@@ -26,3 +27,5 @@ typedef wspp::server<wspp::config::asio> wsserver;
 
 }
 }
+
+#endif // SOCKETIO_SERVERPP_CONFIG_HPP

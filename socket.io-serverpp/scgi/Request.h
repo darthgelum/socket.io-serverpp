@@ -1,4 +1,6 @@
-#pragma once
+#ifndef SOCKETIO_SERVERPP_SCGI_REQUEST_H
+#define SOCKETIO_SERVERPP_SCGI_REQUEST_H
+
 #include <iostream>
 #include <queue>
 #include <boost/signals2.hpp>
@@ -25,8 +27,8 @@ template <class SOCKET>
 class Request
 {
     public:
-        Request(A::io_service& io_service)
-        : m_socket(io_service) { }
+    Request(A::io_context& io_context)
+    : m_socket(io_context) { }
 
         template <typename D>
         void writeData(const D& data)
@@ -127,3 +129,5 @@ class Request
 
 //    using Internal::Request;
 } // Namespace scgi
+
+#endif // SOCKETIO_SERVERPP_SCGI_REQUEST_H

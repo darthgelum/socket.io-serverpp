@@ -1,6 +1,7 @@
-#pragma once
+#ifndef SOCKETIO_SERVERPP_MESSAGE_HPP
+#define SOCKETIO_SERVERPP_MESSAGE_HPP
 
-#include <socket.io-serverpp/config.hpp>
+#include "config.hpp"
 
 namespace SOCKETIO_SERVERPP_NAMESPACE
 {
@@ -25,3 +26,5 @@ struct Message
 using lib::Message;
 
 }
+
+#endif // SOCKETIO_SERVERPP_MESSAGE_HPP

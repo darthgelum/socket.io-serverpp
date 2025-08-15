@@ -2,7 +2,7 @@
 
 #define _SOCKETIO_SERVERPP_CPP11_STL_ 1
 
-#include <socket.io-serverpp/Server.hpp>
+#include "Server.hpp"
 
 using namespace std;
 

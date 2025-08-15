@@ -1,4 +1,5 @@
-#pragma once
+#ifndef SOCKETIO_SERVERPP_UUID_HPP
+#define SOCKETIO_SERVERPP_UUID_HPP
 
 #include <uuid/uuid.h>
 
@@ -22,3 +23,5 @@ namespace uuid
 
 }
 }
+
+#endif // SOCKETIO_SERVERPP_UUID_HPP
