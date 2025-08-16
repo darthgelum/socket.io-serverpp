@@ -47,14 +47,17 @@
       const nsp  = document.getElementById('nsp').value.trim() || '/';
       if (socket) { try { socket.close(); } catch(_){} }
 
-      // Build full URL. Socket.IO client accepts http(s) or ws(s) origins.
-      const url = nsp === '/' ? base : base + nsp;
-      log(`connecting to ${url} ...`);
-      socket = io(url, {
+      // For Socket.IO, the namespace is passed as a separate parameter, not in URL
+      log(`connecting to ${base} namespace=${nsp} ...`);
+      
+      // Proper Socket.IO namespace handling
+      const socketUrl = nsp === '/' ? base : base + nsp;
+      socket = io(socketUrl, {
         transports: ['websocket'], // server is WS-only
         withCredentials: false,
-        // Use default path; server accepts any resource during WS upgrade
-        // path: '/',
+        // forceNew: true, // Force a new connection for namespace changes
+        autoConnect: true,
+        timeout: 20000,
       });
 
       // Core lifecycle
