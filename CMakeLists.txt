@@ -9,6 +9,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(UUID REQUIRED uuid)
 
+# Find Boost with required components
+find_package(Boost REQUIRED)
+if(NOT Boost_FOUND)
+    message(FATAL_ERROR "Boost not found. Please install libboost-dev")
+endif()
+
 # Find Google Test
 find_package(GTest QUIET)
 if(NOT GTest_FOUND)
@@ -32,24 +38,31 @@ include_directories(
     ${PROJECT_SOURCE_DIR}/socket.io-serverpp/common
     ${PROJECT_SOURCE_DIR}/socket.io-serverpp/lib/rapidjson
     ${PROJECT_SOURCE_DIR}/socket.io-serverpp/lib/rapidjson/internal
-    ${PROJECT_SOURCE_DIR}/socket.io-serverpp/scgi
     ${PROJECT_SOURCE_DIR}/external/websocketpp
+    ${Boost_INCLUDE_DIRS}
 )
 
-# Collect source files
+# Collect source files (excluding SCGI)
 file(GLOB_RECURSE SOURCES
     ${PROJECT_SOURCE_DIR}/socket.io-serverpp/*.cpp
     ${PROJECT_SOURCE_DIR}/socket.io-serverpp/common/*.cpp
-    ${PROJECT_SOURCE_DIR}/socket.io-serverpp/scgi/*.cpp
 )
+
+# Exclude SCGI files if they exist
+file(GLOB_RECURSE SCGI_SOURCES ${PROJECT_SOURCE_DIR}/socket.io-serverpp/scgi/*.cpp)
+list(REMOVE_ITEM SOURCES ${SCGI_SOURCES})
 
 # Add main examples (usage.cpp, test1.cpp, test_refactoring.cpp)
 add_executable(usage examples/usage.cpp ${SOURCES})
 add_executable(test1 examples/test1.cpp ${SOURCES})
 
-# Link against UUID library
+# Link against required libraries
 target_link_libraries(usage ${UUID_LIBRARIES})
 target_link_libraries(test1 ${UUID_LIBRARIES})
+
+# Link Boost libraries
+target_link_libraries(usage ${Boost_LIBRARIES})
+target_link_libraries(test1 ${Boost_LIBRARIES})
 
 # Optionally, you can add targets for static/shared library
 # add_library(socket_io_serverpp STATIC ${SOURCES})

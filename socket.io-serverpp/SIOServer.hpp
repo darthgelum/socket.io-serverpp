@@ -7,7 +7,7 @@
 #include "Message.hpp"
 #include "SocketNamespace.hpp"
 #include "config.hpp"
-#include "scgi/Service.h"
+#include "HttpServer.hpp"
 #include "uuid.hpp"
 #include <functional>
 #include <memory>
@@ -27,11 +27,14 @@ namespace lib {
 
 class SocketNamespace;
 
-typedef scgi::Service<asio::local::stream_protocol> scgiserver;
-
 using std::map;
 using std::string;
 using std::vector;
+
+// Import HTTP server classes
+using HttpServer = lib::HttpServer;
+using HttpRequest = lib::HttpRequest;
+using HttpResponse = lib::HttpResponse;
 
 class SIOServer {
 public:
@@ -46,10 +49,11 @@ public:
         m_closeTime(timeouts::DEFAULT_CLOSE_TIME),
         m_pingInterval(timeouts::DEFAULT_PING_INTERVAL),
         m_pingTimeout(timeouts::DEFAULT_PING_TIMEOUT),
-        m_maxPayload(timeouts::DEFAULT_MAX_PAYLOAD) {
+        m_maxPayload(timeouts::DEFAULT_MAX_PAYLOAD),
+        m_httpserver(std::make_shared<HttpServer>(io_service)) {
     
     initialize_websocket_server();
-    initialize_scgi_server();
+    initialize_http_server();
     
     m_sockets = this->of("");
     m_protocols = {"websocket"};
@@ -58,21 +62,20 @@ public:
   }
 
   /**
-   * @brief Starts listening on the specified SCGI socket and WebSocket port
-   * @param scgi_socket Path to the SCGI socket file
+   * @brief Starts listening on the specified HTTP address/port and WebSocket port
+   * @param http_address IP address for HTTP server (e.g., "0.0.0.0")
+   * @param http_port Port number for HTTP connections
    * @param websocket_port Port number for WebSocket connections
    */
-  void listen(const string &scgi_socket, int websocket_port) {
+  void listen(const string &http_address, int http_port, int websocket_port) {
     try {
-      auto acceptor = std::make_shared<scgiserver::proto::acceptor>(
-          m_io_service, scgiserver::proto::endpoint(scgi_socket));
-      m_scgiserver.listen(acceptor);
-      m_scgiserver.start_accept();
+      m_httpserver->listen(http_address, static_cast<unsigned short>(http_port));
+      m_httpserver->start_accept();
 
       m_wsserver.listen(websocket_port);
       m_wsserver.start_accept();
       
-      LOG_INFO("Server listening on SCGI socket: ", scgi_socket, 
+      LOG_INFO("Server listening on HTTP ", http_address, ":", http_port, 
                " and WebSocket port: ", websocket_port);
     } catch (const std::exception& e) {
       LOG_ERROR("Failed to start listening: ", e.what());
@@ -148,11 +151,12 @@ private:
   }
 
   /**
-   * @brief Initializes the SCGI server with proper handlers
+   * @brief Initializes the HTTP server with proper handlers
    */
-  void initialize_scgi_server() {
-    m_scgiserver.sig_RequestReceived.connect(
-        std::bind(&SIOServer::onScgiRequest, this, std::placeholders::_1));
+  void initialize_http_server() {
+    m_httpserver->set_request_handler(
+        std::bind(&SIOServer::onHttpRequest, this, 
+                  std::placeholders::_1, std::placeholders::_2));
   }
 
   // Extract a query parameter from a resource string like
@@ -179,36 +183,77 @@ private:
     return string();
   }
 
-  void onScgiRequest(scgiserver::CRequestPtr req) {
+  void onHttpRequest(const HttpRequest& req, HttpResponse& resp) {
     try {
-      string uri = req->header("REQUEST_URI");
-      string uuid = uuid::uuid1();
+      string uri = req.uri();
+      string method = req.method();
+      string uuid = lib::uuid::uuid1();
       
-      LOG_DEBUG("SCGI request: ", req->header("REQUEST_METHOD"), " ", uri);
+      LOG_DEBUG("HTTP request: ", method, " ", uri);
 
-      if (uri.find("/socket.io/1/") == 0) {
-        std::ostringstream os;
-        os << "Status: " << http_status::OK << "\r\n";
-        os << "Content-Type: text/plain\r\n\r\n";
-        os << uuid + ":";
-        if (m_heartBeat > 0) {
-          os << m_heartBeat;
-        }
-        os << ":" << m_closeTime << ":";
-        for (const auto &p : m_protocols) {
-          os << p << ",";
-        }
-
-        req->writeData(os.str());
-        req->asyncClose(std::bind(
-            [](scgiserver::CRequestPtr req) { 
-              LOG_DEBUG("SCGI request closed"); 
-            }, req));
-      } else {
-        LOG_WARN("Unhandled SCGI request: ", uri);
+      // Handle CORS preflight requests
+      if (method == "OPTIONS") {
+        resp.set_status(beast::http::status::ok);
+        resp.set_header("Access-Control-Allow-Origin", "*");
+        resp.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        resp.set_header("Access-Control-Allow-Headers", "Content-Type");
+        resp.set_body("");
+        return;
       }
+
+      // Handle Socket.IO handshake requests
+      if (uri.find("/socket.io/") == 0) {
+        // Extract EIO version and transport from query parameters
+        string eio_version = get_query_param(uri, "EIO");
+        string transport = get_query_param(uri, "transport");
+        
+        LOG_DEBUG("Socket.IO request - EIO: ", eio_version, ", transport: ", transport);
+        
+        // For Engine.IO v4, return handshake response
+        if (eio_version == "4") {
+          std::ostringstream os;
+          os << "{\"sid\":\"" << uuid 
+             << "\",\"upgrades\":[\"websocket\"]"
+             << ",\"pingInterval\":" << m_pingInterval
+             << ",\"pingTimeout\":" << m_pingTimeout
+             << ",\"maxPayload\":" << m_maxPayload << "}";
+          
+          resp.set_status(beast::http::status::ok);
+          resp.set_content_type("application/json");
+          resp.set_header("Access-Control-Allow-Origin", "*");
+          resp.set_body(os.str());
+          return;
+        }
+        
+        // Legacy Socket.IO v1 handshake (for backwards compatibility)
+        if (uri.find("/socket.io/1/") == 0) {
+          std::ostringstream os;
+          os << uuid + ":";
+          if (m_heartBeat > 0) {
+            os << m_heartBeat;
+          }
+          os << ":" << m_closeTime << ":";
+          for (const auto &p : m_protocols) {
+            os << p << ",";
+          }
+          
+          resp.set_status(beast::http::status::ok);
+          resp.set_content_type("text/plain");
+          resp.set_header("Access-Control-Allow-Origin", "*");
+          resp.set_body(os.str());
+          return;
+        }
+      }
+      
+      // Default 404 response
+      LOG_WARN("Unhandled HTTP request: ", method, " ", uri);
+      resp.set_status(beast::http::status::not_found);
+      resp.set_body("Not Found");
+      
     } catch (const std::exception& e) {
-      LOG_ERROR("Error handling SCGI request: ", e.what());
+      LOG_ERROR("Error handling HTTP request: ", e.what());
+      resp.set_status(beast::http::status::internal_server_error);
+      resp.set_body("Internal Server Error");
     }
   }
 
@@ -607,7 +652,7 @@ private:
   // Core services
   asio::io_service &m_io_service;
   wsserver m_wsserver;
-  scgiserver m_scgiserver;
+  std::shared_ptr<HttpServer> m_httpserver;
   
   // Namespace management
   std::shared_ptr<SocketNamespace> m_sockets;

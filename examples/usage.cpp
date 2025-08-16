@@ -3,7 +3,6 @@
 #include <boost/asio.hpp>
 #include <iostream>
 #include <string>
-#include <cstdio>  // For std::remove
 
 using namespace std;
 using namespace socketio_serverpp;
@@ -27,14 +26,8 @@ int main() {
     socketio_serverpp::lib::Logger::instance().set_level(
         socketio_serverpp::lib::LogLevel::DEBUG);
     
-    // Clean up any existing socket file to prevent "Address already in use" errors
-    const std::string socket_path = "/tmp/dorascgi";
-    if (std::remove(socket_path.c_str()) == 0) {
-      cout << "Removed existing socket file: " << socket_path << endl;
-    }
-    
-    // Start listening
-    io.listen(socket_path, 9001);
+    // Start listening on HTTP and WebSocket ports
+    io.listen("0.0.0.0", 8080, 8081);
 
     // Set up default namespace handlers
     io.sockets()->onConnection([&](Socket &socket) {
@@ -89,8 +82,8 @@ int main() {
       chat->emit("user_left", "\"A user left the chat\"");
     });
 
-    cout << "Socket.IO server started on port 9001" << endl;
-    cout << "SCGI socket: /tmp/dorascgi" << endl;
+    cout << "Socket.IO server started on HTTP port 8080 and WebSocket port 8081" << endl;
+    cout << "Open http://localhost:8080/socket.io/ for handshake" << endl;
     cout << "Press Ctrl+C to stop" << endl;
 
     io.run();

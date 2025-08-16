@@ -11,8 +11,7 @@ int main() {
 
   socketio_serverpp::SIOServer io(io_service);
 
-  unlink("/tmp/dorascgi");
-  io.listen("/tmp/dorascgi", 9001);
+  io.listen("0.0.0.0", 9000, 9003);
 
   // io.sockets.on("connection", [](socketio-serverpp::socket socket)
 #if 0
