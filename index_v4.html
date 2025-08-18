@@ -73,6 +73,7 @@
 
       // App events
       socket.on('chat_message', (payload) => { log('💬 chat_message: ' + JSON.stringify(payload)); });
+      socket.on('welcome', (payload) => { log('💬 chat_message: welcome from server' + JSON.stringify(payload)); });
     };
 
     const doDisconnect = () => { if (socket) { socket.close(); socket = null; setStatus(false); log('🔌 closed by client'); } };

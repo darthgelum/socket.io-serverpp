@@ -26,9 +26,6 @@
  * - SocketNamespace: Manages sockets within a namespace
  * - Socket: Individual socket connection with event handling
  * 
- * Simplified Interface:
- * - Server: Backward-compatible main server class
- * 
  * Usage Example:
  * ==============
  * 

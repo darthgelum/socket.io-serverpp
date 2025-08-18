@@ -68,7 +68,6 @@ int main() {
     auto chat = server->get_namespace("/chat");
     chat->onConnection([&](Socket& socket) {
       cout << "Client connected to /chat namespace" << endl;
-      
       // Send private message to this socket
       socket.emit("private_message", std::string("Welcome to chat!"));
       
