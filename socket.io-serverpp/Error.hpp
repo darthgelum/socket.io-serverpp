@@ -12,6 +12,7 @@ namespace lib {
 enum class SocketIOErrorCode {
     SUCCESS = 0,
     INVALID_NAMESPACE,
+    INVALID_STATE,
     CONNECTION_FAILED,
     MESSAGE_PARSE_ERROR,
     TIMEOUT,

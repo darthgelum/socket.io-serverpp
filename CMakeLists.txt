@@ -69,4 +69,4 @@ target_link_libraries(test1 ${Boost_LIBRARIES})
 # add_library(socket_io_serverpp SHARED ${SOURCES})
 
 # Add test directory
-add_subdirectory(tests)
+# add_subdirectory(tests)

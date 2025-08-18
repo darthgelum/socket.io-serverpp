@@ -10,14 +10,15 @@
 #include <websocketpp/server.hpp>
 
 #include <boost/signals2.hpp>
+#include <string>
 
 namespace SOCKETIO_SERVERPP_NAMESPACE
 {
 namespace lib
 {
 
-typedef string SessionId;
-typedef string Room;
+typedef std::string SessionId;
+typedef std::string Room;
 namespace asio = boost::asio;
 namespace wspp = websocketpp;
 
