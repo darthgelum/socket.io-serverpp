@@ -502,7 +502,8 @@ private:
             return;
         }
 
-        // Existing: flush or hold
+        // Existing: flush queued packets if any (e.g., OPEN handshake), otherwise
+        // if WS is already active, answer immediately with a NOOP; else hold.
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             auto it = m_polling.find(conn_id);
@@ -514,6 +515,21 @@ private:
                 std::string body = encode_payload(it->second.outgoing); it->second.outgoing.clear();
                 http::response<http::string_body> res{http::status::ok, req.version()}; fill_cors_headers(res, req);
                 res.set(http::field::cache_control, "no-store, no-cache, must-revalidate, proxy-revalidate"); res.set(http::field::content_type, "text/plain; charset=UTF-8"); res.body() = std::move(body); res.prepare_payload(); write_and_close(socket, std::move(res)); return;
+            }
+            // If WebSocket is already active for this connection and there's nothing to flush,
+            // answer immediately with a NOOP instead of holding the long-poll open.
+            bool ws_active = (m_ws_sessions.find(conn_id) != m_ws_sessions.end());
+            if (ws_active) {
+                std::deque<std::string> noop; noop.emplace_back(1, engineio::packet_type::NOOP);
+                http::response<http::string_body> res{http::status::ok, req.version()};
+                fill_cors_headers(res, req);
+                res.set(http::field::cache_control, "no-store, no-cache, must-revalidate, proxy-revalidate");
+                res.set(http::field::content_type, "text/plain; charset=UTF-8");
+                res.body() = encode_payload(noop);
+                res.prepare_payload();
+                write_and_close(socket, std::move(res));
+                LOG_TRACE("Unified polling GET answered immediately with NOOP (WS active, empty queue) for conn=", conn_id);
+                return;
             }
             // If a previous pending socket exists but got closed, drop it
             if (it->second.pending_socket && !it->second.pending_socket->is_open()) {
