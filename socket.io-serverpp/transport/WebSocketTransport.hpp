@@ -40,6 +40,8 @@ public:
     
     void listen(const std::string& address, int port) override {
         try {
+            // Set reuse address option to avoid "Address already in use" errors
+            m_server.set_reuse_addr(true);
             m_server.listen(port);
             LOG_INFO("WebSocket transport listening on port: ", port);
         } catch (const std::exception& e) {
@@ -97,7 +99,22 @@ public:
     
     void stop() override {
         try {
+            // Close all active connections first
+            {
+                std::lock_guard<std::mutex> lock(m_connections_mutex);
+                for (const auto& conn_pair : m_id_to_handle) {
+                    try {
+                        m_server.close(conn_pair.second, websocketpp::close::status::going_away, "Server shutdown");
+                    } catch (const std::exception& e) {
+                        LOG_WARN("Error closing connection during shutdown: ", e.what());
+                    }
+                }
+            }
+            
+            // Stop the server
             m_server.stop();
+            
+            // Clear connection mappings
             std::lock_guard<std::mutex> lock(m_connections_mutex);
             m_connections.clear();
             m_handle_to_id.clear();
@@ -131,6 +148,9 @@ private:
         m_server.init_asio(&m_io_service);
         m_server.set_access_channels(websocketpp::log::alevel::none);
         m_server.set_error_channels(websocketpp::log::elevel::warn);
+        
+        // Set socket options to avoid "Address already in use" errors
+        m_server.set_reuse_addr(true);
         
         // Set handlers
         m_server.set_open_handler([this](connection_hdl hdl) {
