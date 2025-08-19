@@ -53,7 +53,7 @@
       // Proper Socket.IO namespace handling
       const socketUrl = nsp === '/' ? base : base + nsp;
       socket = io(socketUrl, {
-        transports: ['websocket'], // server is WS-only
+        transports: ['polling'], // server is Polling
         withCredentials: false,
         // forceNew: true, // Force a new connection for namespace changes
         autoConnect: true,
