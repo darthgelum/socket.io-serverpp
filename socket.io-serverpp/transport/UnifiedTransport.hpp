@@ -16,6 +16,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -76,32 +77,30 @@ public:
     }
 
     bool send_message(const ConnectionHandle& connection, const std::string& message, bool is_binary = false) override {
-        // Try WebSocket session first
-        std::shared_ptr<class WSSession> ws;
+        // Prefer WebSocket only AFTER Engine.IO upgrade (client sent '5').
+        // Exception: allow probe PONG ("3probe") to go over WS during upgrade handshake.
+    std::shared_ptr<class WSSession> ws;
+    bool ws_can_send = false;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             auto it = m_ws_sessions.find(connection.id);
-            if (it != m_ws_sessions.end()) ws = it->second;
+            if (it != m_ws_sessions.end()) {
+                ws = it->second;
+        bool upgraded = (m_ws_upgraded.find(connection.id) != m_ws_upgraded.end());
+        bool is_native_ws = (m_ws_native.find(connection.id) != m_ws_native.end());
+                bool is_probe_pong = (!message.empty() && message[0] == engine_io::PONG && message.size() >= 6 && message.substr(1) == "probe");
+        ws_can_send = upgraded || is_native_ws || is_probe_pong;
+            }
         }
-        if (ws) {
+        if (ws && ws_can_send) {
             LOG_TRACE("UnifiedTransport send -> WS conn=", connection.id, ", bytes=", message.size());
             // If this is Engine.IO OPEN, map sid->conn for completeness
             if (!message.empty() && message[0] == engineio::packet_type::OPEN) {
-                auto brace = message.find('{');
-                if (brace != std::string::npos) {
-                    auto json = message.substr(brace);
-                    auto sid_pos = json.find("\"sid\"");
-                    if (sid_pos != std::string::npos) {
-                        auto colon = json.find(':', sid_pos);
-                        auto q1 = json.find('"', colon + 1);
-                        auto q2 = (q1 != std::string::npos) ? json.find('"', q1 + 1) : std::string::npos;
-                        if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1 + 1) {
-                            std::string sid = json.substr(q1 + 1, q2 - (q1 + 1));
-                            std::lock_guard<std::mutex> lock(m_mutex);
-                            m_sid_to_conn[sid] = connection.id;
-                            LOG_DEBUG("UnifiedTransport(WS) mapped sid ", sid, " to conn ", connection.id);
-                        }
-                    }
+                std::string sid;
+                if (extract_sid_from_open(message, sid)) {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    m_sid_to_conn[sid] = connection.id;
+                    LOG_DEBUG("UnifiedTransport(WS) mapped sid ", sid, " to conn ", connection.id);
                 }
             }
             ws->send(message, is_binary);
@@ -122,20 +121,10 @@ public:
 
             // If this is an Engine.IO OPEN packet, parse sid and map sid->conn
             if (!message.empty() && message[0] == engineio::packet_type::OPEN) {
-                auto brace = message.find('{');
-                if (brace != std::string::npos) {
-                    auto json = message.substr(brace);
-                    auto sid_pos = json.find("\"sid\"");
-                    if (sid_pos != std::string::npos) {
-                        auto colon = json.find(':', sid_pos);
-                        auto quote1 = json.find('"', colon + 1);
-                        auto quote2 = (quote1 != std::string::npos) ? json.find('"', quote1 + 1) : std::string::npos;
-                        if (quote1 != std::string::npos && quote2 != std::string::npos && quote2 > quote1 + 1) {
-                            std::string sid = json.substr(quote1 + 1, quote2 - (quote1 + 1));
-                            m_sid_to_conn[sid] = connection.id;
-                            LOG_DEBUG("UnifiedTransport mapped sid ", sid, " to conn ", connection.id);
-                        }
-                    }
+                std::string sid;
+                if (extract_sid_from_open(message, sid)) {
+                    m_sid_to_conn[sid] = connection.id;
+                    LOG_DEBUG("UnifiedTransport mapped sid ", sid, " to conn ", connection.id);
                 }
             }
 
@@ -264,6 +253,11 @@ private:
             auto self = shared_from_this();
             m_ws.async_accept(req, [self](beast::error_code ec){
                 if (ec) { self->fail("accept", ec); self->on_closed(1002, "Handshake failed"); return; }
+                // Mark this WebSocket as established so polling side can react appropriately
+                if (self->m_parent.get_event_handler()) {
+                    // no-op, just ensures parent exists
+                }
+                self->m_parent.on_ws_established(self->m_id);
                 self->on_accepted();
             });
         }
@@ -301,6 +295,10 @@ private:
                 bool is_bin = self->m_ws.got_binary();
                 std::string payload = beast::buffers_to_string(self->m_read_buf.data());
                 self->m_read_buf.consume(self->m_read_buf.size());
+                // If this is Engine.IO UPGRADE (type '5'), mark upgrade complete for this connection.
+                if (!payload.empty() && payload[0] == engineio::packet_type::UPGRADE) {
+                    self->m_parent.on_ws_upgraded(self->m_id);
+                }
                 if (auto h = self->m_parent.get_event_handler()) h->on_message(TransportMessage(ConnectionHandle(self->m_id), payload, is_bin));
                 self->do_read();
             });
@@ -363,7 +361,7 @@ private:
         }
 
         // WebSocket upgrade?
-        if (websocket::is_upgrade(req)) {
+    if (websocket::is_upgrade(req)) {
             handle_websocket(std::move(*socket), req);
             return;
         }
@@ -373,8 +371,8 @@ private:
     }
 
     void handle_websocket(tcp::socket socket, const http::request<http::string_body>& req) {
-    auto qparams = parse_query(std::string(req.target()));
-    LOG_DEBUG("Unified WS request target=", std::string(req.target()));
+        auto qparams = parse_query(std::string(req.target()));
+        LOG_DEBUG("Unified WS request target=", std::string(req.target()));
         std::string sid; if (auto it = qparams.find("sid"); it != qparams.end()) sid = it->second;
 
         ConnectionId conn_id;
@@ -384,13 +382,14 @@ private:
             std::lock_guard<std::mutex> lock(m_mutex);
             auto it = m_sid_to_conn.find(sid);
             if (it == m_sid_to_conn.end()) {
-                // Unknown sid: reject
+                // Unknown sid: reject with 400 and close
+                auto sp_socket = std::make_shared<tcp::socket>(std::move(socket));
                 http::response<http::string_body> res{http::status::bad_request, req.version()};
-                auto sp = std::make_shared<http::response<http::string_body>>(std::move(res));
-                // Need a socket to write; since we only have a moved socket, close it immediately
-                boost::system::error_code ig;
-                socket.shutdown(tcp::socket::shutdown_both, ig);
-                socket.close(ig);
+                fill_cors_headers(res, req);
+                res.set(http::field::content_type, "text/plain; charset=UTF-8");
+                res.body() = "unknown sid";
+                res.prepare_payload();
+                write_and_close(sp_socket, std::move(res));
                 LOG_WARN("UnifiedTransport WS upgrade with unknown sid: ", sid);
                 return;
             }
@@ -437,6 +436,9 @@ private:
                         m_sid_to_conn[sid] = conn_id;
                     }
                 }
+            } else {
+                // Mark as native WebSocket (no upgrade flow)
+                m_ws_native.insert(conn_id);
             }
         }
     LOG_DEBUG("Unified WS accepted pre-accept conn_id=", conn_id, ", sid=", sid, ", upgrade=", is_upgrade);
@@ -503,7 +505,8 @@ private:
             return;
         }
 
-        // Existing: flush or hold
+        // Existing: flush queued packets if any (e.g., OPEN handshake), otherwise
+        // if WS is already active, answer immediately with a NOOP; else hold.
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             auto it = m_polling.find(conn_id);
@@ -516,6 +519,22 @@ private:
                 http::response<http::string_body> res{http::status::ok, req.version()}; fill_cors_headers(res, req);
                 res.set(http::field::cache_control, "no-store, no-cache, must-revalidate, proxy-revalidate"); res.set(http::field::content_type, "text/plain; charset=UTF-8"); res.body() = std::move(body); res.prepare_payload(); write_and_close(socket, std::move(res)); return;
             }
+            // If WebSocket upgrade has been completed for this connection (client sent '5'),
+            // and there's nothing to flush, answer immediately with a NOOP instead of holding
+            // the long-poll open.
+            bool ws_upgraded = (m_ws_upgraded.find(conn_id) != m_ws_upgraded.end());
+            if (ws_upgraded) {
+                std::deque<std::string> noop; noop.emplace_back(1, engineio::packet_type::NOOP);
+                http::response<http::string_body> res{http::status::ok, req.version()};
+                fill_cors_headers(res, req);
+                res.set(http::field::cache_control, "no-store, no-cache, must-revalidate, proxy-revalidate");
+                res.set(http::field::content_type, "text/plain; charset=UTF-8");
+                res.body() = encode_payload(noop);
+                res.prepare_payload();
+                write_and_close(socket, std::move(res));
+                LOG_TRACE("Unified polling GET answered immediately with NOOP (WS upgraded, empty queue) for conn=", conn_id);
+                return;
+            }
             // If a previous pending socket exists but got closed, drop it
             if (it->second.pending_socket && !it->second.pending_socket->is_open()) {
                 it->second.pending_socket.reset();
@@ -527,7 +546,13 @@ private:
             it->second.pending_req = std::make_shared<http::request<http::string_body>>(req);
             it->second.pending_timer = std::make_shared<asio::steady_timer>(m_io_service);
             auto timer = it->second.pending_timer; auto held_conn = conn_id;
-            timer->expires_after(std::chrono::milliseconds(timeouts::DEFAULT_PING_INTERVAL));
+            // Reduce long-poll wait when WS is established but not yet upgraded, to respond quickly.
+            int wait_ms = timeouts::DEFAULT_PING_INTERVAL;
+            bool ws_established = (m_ws_established.find(conn_id) != m_ws_established.end());
+            if (ws_established && !ws_upgraded) {
+                wait_ms = 100; // short timeout during pre-upgrade phase
+            }
+            timer->expires_after(std::chrono::milliseconds(wait_ms));
             timer->async_wait([self = shared_from_this(), held_conn](const boost::system::error_code& ec){ if (ec) return; self->on_pending_timeout(held_conn); });
         }
     }
@@ -573,6 +598,25 @@ private:
         msg.set(http::field::access_control_allow_methods, "GET,POST,OPTIONS");
     }
 
+    // Extract "sid" value from an Engine.IO OPEN packet (text frame starting with '0' followed by JSON)
+    static bool extract_sid_from_open(const std::string& message, std::string& sid_out) {
+        // Expect first char to be OPEN (0)
+        if (message.empty() || message[0] != engineio::packet_type::OPEN) return false;
+        auto brace = message.find('{');
+        if (brace == std::string::npos) return false;
+        auto json = message.substr(brace);
+        auto sid_pos = json.find("\"sid\"");
+        if (sid_pos == std::string::npos) return false;
+        auto colon = json.find(':', sid_pos);
+        if (colon == std::string::npos) return false;
+        auto q1 = json.find('"', colon + 1);
+        if (q1 == std::string::npos) return false;
+        auto q2 = json.find('"', q1 + 1);
+        if (q2 == std::string::npos || q2 <= q1 + 1) return false;
+        sid_out = json.substr(q1 + 1, q2 - (q1 + 1));
+        return !sid_out.empty();
+    }
+
     std::shared_ptr<TransportEventHandler> get_event_handler() {
         std::lock_guard<std::mutex> lock(m_handler_mutex); return m_event_handler;
     }
@@ -582,6 +626,9 @@ private:
             std::lock_guard<std::mutex> lock(m_mutex);
             m_ws_sessions.erase(id);
             m_conn_info.erase(id);
+            m_ws_established.erase(id);
+            m_ws_upgraded.erase(id);
+            m_ws_native.erase(id);
             // Remove any sid mapping pointing to this connection
             for (auto it = m_sid_to_conn.begin(); it != m_sid_to_conn.end(); ) {
                 if (it->second == id) it = m_sid_to_conn.erase(it); else ++it;
@@ -622,6 +669,25 @@ private:
     std::unordered_map<ConnectionId, PollState> m_polling;
     std::unordered_map<std::string, ConnectionId> m_sid_to_conn;
     std::unordered_map<ConnectionId, std::shared_ptr<WSSession>> m_ws_sessions;
+    // Connections with WebSocket handshakes fully accepted
+    std::unordered_set<ConnectionId> m_ws_established;
+    // Connections where Engine.IO upgrade packet ('5') was received
+    std::unordered_set<ConnectionId> m_ws_upgraded;
+    // WebSocket connections that started natively (no upgrade from polling)
+    std::unordered_set<ConnectionId> m_ws_native;
+
+public:
+    // Mark a WebSocket session as fully established (called from WSSession thread)
+    void on_ws_established(const ConnectionId& id) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_ws_established.insert(id);
+    }
+
+    // Mark that Engine.IO UPGRADE (type '5') has been received on WebSocket
+    void on_ws_upgraded(const ConnectionId& id) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_ws_upgraded.insert(id);
+    }
 };
 
 class UnifiedTransportFactory : public TransportFactory {
