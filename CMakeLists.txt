@@ -51,17 +51,20 @@ file(GLOB_RECURSE SOURCES
 file(GLOB_RECURSE SCGI_SOURCES ${PROJECT_SOURCE_DIR}/socket.io-serverpp/scgi/*.cpp)
 list(REMOVE_ITEM SOURCES ${SCGI_SOURCES})
 
-# Add main examples (usage.cpp, test1.cpp, usage_polling.cpp)
+# Add main examples (usage.cpp, usage_polling.cpp, usage_unified.cpp)
 add_executable(usage examples/usage.cpp ${SOURCES})
 add_executable(usage_polling examples/usage_polling.cpp ${SOURCES})
+add_executable(usage_unified examples/usage_unified.cpp ${SOURCES})
 
 # Link against required libraries
 target_link_libraries(usage ${UUID_LIBRARIES})
 target_link_libraries(usage_polling ${UUID_LIBRARIES})
+target_link_libraries(usage_unified ${UUID_LIBRARIES})
 
 # Link Boost libraries
 target_link_libraries(usage ${Boost_LIBRARIES})
 target_link_libraries(usage_polling ${Boost_LIBRARIES})
+target_link_libraries(usage_unified ${Boost_LIBRARIES})
 
 # Optionally, you can add targets for static/shared library
 # add_library(socket_io_serverpp STATIC ${SOURCES})

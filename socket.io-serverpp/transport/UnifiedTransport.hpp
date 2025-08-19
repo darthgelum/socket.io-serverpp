@@ -429,6 +429,13 @@ private:
                     itp->second.pending_req.reset();
                     itp->second.pending_timer.reset();
                 }
+                // Also ensure sid maps to this WebSocket connection id going forward
+                if (!sid.empty()) {
+                    auto it_sid = m_sid_to_conn.find(sid);
+                    if (it_sid == m_sid_to_conn.end() || it_sid->second != conn_id) {
+                        m_sid_to_conn[sid] = conn_id;
+                    }
+                }
             }
         }
     LOG_DEBUG("Unified WS accepted pre-accept conn_id=", conn_id, ", sid=", sid, ", upgrade=", is_upgrade);
@@ -508,6 +515,13 @@ private:
                 http::response<http::string_body> res{http::status::ok, req.version()}; fill_cors_headers(res, req);
                 res.set(http::field::cache_control, "no-store, no-cache, must-revalidate, proxy-revalidate"); res.set(http::field::content_type, "text/plain; charset=UTF-8"); res.body() = std::move(body); res.prepare_payload(); write_and_close(socket, std::move(res)); return;
             }
+            // If a previous pending socket exists but got closed, drop it
+            if (it->second.pending_socket && !it->second.pending_socket->is_open()) {
+                it->second.pending_socket.reset();
+                it->second.pending_req.reset();
+                if (it->second.pending_timer) { boost::system::error_code ec; it->second.pending_timer->cancel(ec); }
+                it->second.pending_timer.reset();
+            }
             it->second.pending_socket = socket;
             it->second.pending_req = std::make_shared<http::request<http::string_body>>(req);
             it->second.pending_timer = std::make_shared<asio::steady_timer>(m_io_service);
@@ -567,6 +581,10 @@ private:
             std::lock_guard<std::mutex> lock(m_mutex);
             m_ws_sessions.erase(id);
             m_conn_info.erase(id);
+            // Remove any sid mapping pointing to this connection
+            for (auto it = m_sid_to_conn.begin(); it != m_sid_to_conn.end(); ) {
+                if (it->second == id) it = m_sid_to_conn.erase(it); else ++it;
+            }
         }
         if (auto h = get_event_handler()) h->on_connection_close(ConnectionHandle(id), code, reason);
         LOG_DEBUG("Unified WS connection closed: ", id);

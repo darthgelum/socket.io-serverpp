@@ -95,11 +95,13 @@ public:
     EngineIOSession(const std::string& session_id,
                    const transport::ConnectionHandle& connection,
                    const EngineIOConfig& config,
-                   std::shared_ptr<EngineIOSessionHandler> handler)
+                   std::shared_ptr<EngineIOSessionHandler> handler,
+                   bool is_websocket_transport = false)
         : m_session_id(session_id)
         , m_connection(connection)
         , m_config(config)
         , m_handler(handler)
+        , m_is_websocket(is_websocket_transport)
         , m_state(SessionState::CONNECTING)
         , m_transport_closed(false)
         , m_last_pong(std::chrono::steady_clock::now())
@@ -153,7 +155,7 @@ public:
         char packet_type = payload[0];
         std::string packet_data = payload.length() > 1 ? payload.substr(1) : std::string();
         
-        LOG_TRACE("Processing Engine.IO packet type: ", packet_type, " for session: ", m_session_id);
+    LOG_DEBUG("Processing Engine.IO packet type: ", packet_type, " for session: ", m_session_id);
         
         switch (packet_type) {
         case engine_io::PING:
@@ -313,11 +315,16 @@ private:
         std::ostringstream handshake;
         handshake << engine_io::OPEN;
         handshake << "{\"sid\":\"" << m_session_id << "\",";
-        // Advertise upgrades if allowed
-        if (m_config.allow_upgrades) {
-            handshake << "\"upgrades\":[\"websocket\"],";
-        } else {
+        // Advertise upgrades depending on current transport
+        // If current transport is WebSocket, there is no further upgrade.
+        if (m_is_websocket) {
             handshake << "\"upgrades\":[],";
+        } else {
+            if (m_config.allow_upgrades) {
+                handshake << "\"upgrades\":[\"websocket\"],";
+            } else {
+                handshake << "\"upgrades\":[],";
+            }
         }
         handshake << "\"pingInterval\":" << m_config.ping_interval << ",";
         handshake << "\"pingTimeout\":" << m_config.ping_timeout << ",";
@@ -339,12 +346,12 @@ private:
         if (data == "probe") {
             std::string pong_packet = std::string(1, engine_io::PONG) + "probe";
             transport->send_message(m_connection, pong_packet);
-            LOG_TRACE("Responded to ping probe for session: ", m_session_id);
+            LOG_DEBUG("Responded to ping probe for session: ", m_session_id);
         } else {
             // Regular ping - respond with pong
             std::string pong_packet(1, engine_io::PONG);
             transport->send_message(m_connection, pong_packet);
-            LOG_TRACE("Responded to ping for session: ", m_session_id);
+            LOG_DEBUG("Responded to ping for session: ", m_session_id);
         }
         
         // Update last activity
@@ -353,7 +360,7 @@ private:
     
     void handle_pong() {
         m_last_pong = std::chrono::steady_clock::now();
-        LOG_TRACE("Received pong for session: ", m_session_id);
+    LOG_DEBUG("Received pong for session: ", m_session_id);
     }
     
     void handle_close() {
@@ -399,7 +406,7 @@ private:
         if (transport) {
             std::string ping_packet(1, engine_io::PING);
             if (transport->send_message(m_connection, ping_packet)) {
-                LOG_TRACE("Sent ping to session: ", m_session_id);
+                LOG_DEBUG("Sent ping to session: ", m_session_id);
                 // Schedule next ping
                 schedule_ping();
             } else {
@@ -426,6 +433,7 @@ private:
     EngineIOConfig m_config;
     std::shared_ptr<EngineIOSessionHandler> m_handler;
     std::weak_ptr<transport::Transport> m_transport;
+    bool m_is_websocket{false};
     
     SessionState m_state;
     bool m_transport_closed;  // Flag to track if transport was closed externally

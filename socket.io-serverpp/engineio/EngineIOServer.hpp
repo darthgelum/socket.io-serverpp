@@ -208,8 +208,13 @@ public:
             
             // Create new session
             transport::ConnectionHandle conn_handle(info.id);
+            bool is_ws = false;
+            auto tp_it = info.query_params.find("transport");
+            if (tp_it != info.query_params.end() && tp_it->second == "websocket") {
+                is_ws = true;
+            }
             auto session = std::make_shared<EngineIOSession>(
-                session_id, conn_handle, m_config, shared_from_this());
+                session_id, conn_handle, m_config, shared_from_this(), is_ws);
             
             // Create and assign timer for this session
             auto timer = std::make_shared<asio::steady_timer>(m_io_service);
@@ -259,7 +264,26 @@ public:
             }
             
             if (session) {
-                session->process_message(message.payload);
+                // Engine.IO over WebSocket can batch multiple packets in a single WS frame
+                // separated by ASCII Record Separator (0x1e). Split and process each.
+                constexpr char RS = '\x1e';
+                const std::string& raw = message.payload;
+                if (raw.find(RS) != std::string::npos) {
+                    size_t start = 0;
+                    while (start <= raw.size()) {
+                        size_t pos = raw.find(RS, start);
+                        std::string_view sv = (pos == std::string::npos)
+                            ? std::string_view(raw).substr(start)
+                            : std::string_view(raw).substr(start, pos - start);
+                        if (!sv.empty()) {
+                            session->process_message(std::string(sv));
+                        }
+                        if (pos == std::string::npos) break;
+                        start = pos + 1;
+                    }
+                } else {
+                    session->process_message(raw);
+                }
             } else {
                 LOG_WARN("Session not found for message: ", session_id);
             }

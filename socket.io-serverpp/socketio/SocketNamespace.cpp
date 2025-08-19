@@ -1,80 +1,97 @@
 #include "SocketNamespace.hpp"
 #include "SocketIOServer.hpp"
 #include "Socket.hpp"
+#include <vector>
 
 namespace SOCKETIO_SERVERPP_NAMESPACE {
 namespace lib {
 
-void SocketNamespace::send(const std::string& data) {
-    if (data.empty()) {
-        LOG_WARN("Attempting to send empty data");
-        return;
-    }
-
-    size_t sent_count = 0;
-    {
-        std::lock_guard<std::mutex> lock(m_sockets_mutex);
-        for (const auto& socket_pair : m_sockets) {
-            try {
-                socket_pair.second->send(data);
-                ++sent_count;
-            } catch (const std::exception& e) {
-                LOG_WARN("Failed to send to socket: ", e.what());
+// Minimal JSON string escaper (duplicated from Socket)
+static std::string ns_escape_json_string(const std::string& str) {
+    std::string escaped; escaped.reserve(str.length() + 10);
+    for (char c : str) {
+        switch (c) {
+        case '"': escaped += "\\\""; break;
+        case '\\': escaped += "\\\\"; break;
+        case '\b': escaped += "\\b"; break;
+        case '\f': escaped += "\\f"; break;
+        case '\n': escaped += "\\n"; break;
+        case '\r': escaped += "\\r"; break;
+        case '\t': escaped += "\\t"; break;
+        default:
+            if (static_cast<unsigned char>(c) < 0x20) {
+                char buffer[7];
+                snprintf(buffer, sizeof(buffer), "\\u%04x", static_cast<unsigned char>(c));
+                escaped += buffer;
+            } else {
+                escaped += c;
             }
         }
     }
+    return escaped;
+}
+
+void SocketNamespace::send(const std::string& data) {
+    if (data.empty()) { LOG_WARN("Attempting to send empty data"); return; }
+
+    size_t sent_count = 0; std::vector<std::string> to_remove;
+    {
+        std::lock_guard<std::mutex> lock(m_sockets_mutex);
+        const std::string payload = std::string("[\"message\",\"") + ns_escape_json_string(data) + "\"]";
+        for (const auto& socket_pair : m_sockets) {
+            const std::string& sid = socket_pair.first;
+            bool ok = m_server.send_socket_io_message(sid, socket_io::EVENT, m_namespace, payload);
+            if (ok) ++sent_count; else to_remove.push_back(sid);
+        }
+        for (const auto& sid : to_remove) m_sockets.erase(sid);
+    }
+    if (!to_remove.empty()) LOG_DEBUG("Pruned ", to_remove.size(), " stale sockets from namespace: ", m_namespace);
     LOG_DEBUG("Sent data to ", sent_count, " sockets in namespace: ", m_namespace);
 }
 
 void SocketNamespace::emit(const std::string& name, const std::string& data) {
-    if (name.empty()) {
-        LOG_WARN("Attempting to emit event with empty name");
-        return;
-    }
+    if (name.empty()) { LOG_WARN("Attempting to emit event with empty name"); return; }
 
-    size_t sent_count = 0;
+    size_t sent_count = 0; std::vector<std::string> to_remove;
     {
         std::lock_guard<std::mutex> lock(m_sockets_mutex);
-        for (const auto& socket_pair : m_sockets) {
-            try {
-                socket_pair.second->emit(name, data);
-                ++sent_count;
-            } catch (const std::exception& e) {
-                LOG_WARN("Failed to emit to socket: ", e.what());
-            }
+        // Build Socket.IO EVENT payload: ["name", dataOrString]
+        std::string payload;
+        if (data.empty()) {
+            payload = std::string("[\"") + ns_escape_json_string(name) + "\"]";
+        } else if (!data.empty() && (data.front() == '{' || data.front() == '[')) {
+            // Treat as JSON value
+            payload = std::string("[\"") + ns_escape_json_string(name) + "\"," + data + "]";
+        } else {
+            // Quote as string
+            payload = std::string("[\"") + ns_escape_json_string(name) + "\",\"" + ns_escape_json_string(data) + "\"]";
         }
+
+        for (const auto& socket_pair : m_sockets) {
+            const std::string& sid = socket_pair.first;
+            bool ok = m_server.send_socket_io_message(sid, socket_io::EVENT, m_namespace, payload);
+            if (ok) ++sent_count; else to_remove.push_back(sid);
+        }
+        for (const auto& sid : to_remove) m_sockets.erase(sid);
     }
+    if (!to_remove.empty()) LOG_DEBUG("Pruned ", to_remove.size(), " stale sockets from namespace: ", m_namespace);
     LOG_DEBUG("Emitted event '", name, "' to ", sent_count, " sockets in namespace: ", m_namespace);
 }
 
 void SocketNamespace::broadcast_from_session(const std::string& sender_session_id, 
                                             const std::string& event_data) {
-    size_t broadcast_count = 0;
-    
-    std::lock_guard<std::mutex> lock(m_sockets_mutex);
-    for (const auto& socket_pair : m_sockets) {
-        // Skip sender
-        if (socket_pair.first == sender_session_id) {
-            continue;
-        }
-        
-        try {
-            // Send Socket.IO EVENT packet
+    size_t broadcast_count = 0; std::vector<std::string> to_remove;
+    {
+        std::lock_guard<std::mutex> lock(m_sockets_mutex);
+        for (const auto& socket_pair : m_sockets) {
+            if (socket_pair.first == sender_session_id) continue;
             bool success = m_server.send_socket_io_message(
-                socket_pair.first, 
-                socket_io::EVENT, 
-                m_namespace, 
-                event_data
-            );
-            
-            if (success) {
-                ++broadcast_count;
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to broadcast to session ", socket_pair.first, ": ", e.what());
+                socket_pair.first, socket_io::EVENT, m_namespace, event_data);
+            if (success) ++broadcast_count; else to_remove.push_back(socket_pair.first);
         }
+        for (const auto& sid : to_remove) m_sockets.erase(sid);
     }
-    
+    if (!to_remove.empty()) LOG_DEBUG("Pruned ", to_remove.size(), " stale sockets during broadcast from ", sender_session_id);
     LOG_TRACE("Broadcast event to ", broadcast_count, " sessions in namespace: ", m_namespace);
 }
 

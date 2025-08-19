@@ -38,7 +38,8 @@ namespace protocol {
 // Default timeout values (milliseconds)
 namespace timeouts {
     constexpr int DEFAULT_PING_INTERVAL = 25000;
-    constexpr int DEFAULT_PING_TIMEOUT = 5000;
+    // Typical Engine.IO v4 timeout to allow sufficient time for pong after ping
+    constexpr int DEFAULT_PING_TIMEOUT = 20000;
     constexpr int DEFAULT_HEARTBEAT = 30;
     constexpr int DEFAULT_CLOSE_TIME = 30;
     constexpr int DEFAULT_MAX_PAYLOAD = 1000000;
