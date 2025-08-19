@@ -13,7 +13,7 @@
  * 
  * Transport Layer:
  * - Abstract transport interface for WebSocket, HTTP polling, etc.
- * - WebSocketTransport: WebSocket implementation using websocketpp
+ * - WebSocketTransport: WebSocket implementation using Boost.Beast
  * - Future: HTTPPollingTransport for long polling support
  * 
  * Engine.IO Layer:

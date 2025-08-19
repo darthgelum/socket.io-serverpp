@@ -38,7 +38,6 @@ include_directories(
     ${PROJECT_SOURCE_DIR}/socket.io-serverpp/common
     ${PROJECT_SOURCE_DIR}/socket.io-serverpp/lib/rapidjson
     ${PROJECT_SOURCE_DIR}/socket.io-serverpp/lib/rapidjson/internal
-    ${PROJECT_SOURCE_DIR}/external/websocketpp
     ${Boost_INCLUDE_DIRS}
 )
 

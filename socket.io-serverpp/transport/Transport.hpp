@@ -23,7 +23,7 @@ using ConnectionId = std::string;
  */
 struct ConnectionHandle {
     ConnectionId id;
-    void* native_handle;  // Transport-specific handle (wspp::connection_hdl, etc.)
+    void* native_handle;  // Transport-specific handle (e.g., underlying socket/stream)
     
     ConnectionHandle(const ConnectionId& conn_id, void* handle = nullptr) 
         : id(conn_id), native_handle(handle) {}
