@@ -15,6 +15,10 @@ namespace SOCKETIO_SERVERPP_NAMESPACE {
 namespace lib {
 namespace transport {
 
+// WebSocketPP type aliases
+using wsserver = websocketpp::server<websocketpp::config::asio>;
+using connection_hdl = websocketpp::connection_hdl;
+
 /**
  * @brief WebSocket transport implementation
  */
@@ -61,7 +65,7 @@ public:
                 return false;
             }
             
-            auto opcode = is_binary ? wspp::frame::opcode::binary : wspp::frame::opcode::text;
+            auto opcode = is_binary ? websocketpp::frame::opcode::binary : websocketpp::frame::opcode::text;
             m_server.send(it->second, message, opcode);
             LOG_TRACE("Sent message to connection: ", connection.id);
             return true;
@@ -129,25 +133,43 @@ private:
         m_server.set_error_channels(websocketpp::log::elevel::warn);
         
         // Set handlers
-        m_server.set_open_handler([this](wspp::connection_hdl hdl) {
+        m_server.set_open_handler([this](connection_hdl hdl) {
             on_websocket_open(hdl);
         });
         
-        m_server.set_message_handler([this](wspp::connection_hdl hdl, wsserver::message_ptr msg) {
+        m_server.set_message_handler([this](connection_hdl hdl, wsserver::message_ptr msg) {
             on_websocket_message(hdl, msg);
         });
         
-        m_server.set_close_handler([this](wspp::connection_hdl hdl) {
+        m_server.set_close_handler([this](connection_hdl hdl) {
             on_websocket_close(hdl);
         });
         
         LOG_DEBUG("WebSocket transport server initialized");
     }
     
-    void on_websocket_open(wspp::connection_hdl hdl) {
+    void on_websocket_open(connection_hdl hdl) {
         try {
             auto connection = m_server.get_con_from_hdl(hdl);
-            std::string conn_id = generate_connection_id();
+            
+            // Parse query parameters to check for existing session ID
+            std::string resource = connection->get_resource();
+            std::map<std::string, std::string> query_params;
+            parse_query_parameters(resource, query_params);
+            
+            // Check if this is a WebSocket upgrade for an existing session
+            std::string conn_id;
+            auto sid_it = query_params.find("sid");
+            if (sid_it != query_params.end() && !sid_it->second.empty()) {
+                // This is a WebSocket upgrade for an existing session
+                // Use session ID as connection ID to maintain consistency
+                conn_id = sid_it->second;
+                LOG_DEBUG("WebSocket upgrade for existing session: ", conn_id);
+            } else {
+                // New WebSocket connection without existing session
+                conn_id = generate_connection_id();
+                LOG_DEBUG("New WebSocket connection: ", conn_id);
+            }
             
             // Store connection mapping
             {
@@ -157,29 +179,20 @@ private:
                 // Extract connection details
                 conn_info->remote_address = connection->get_remote_endpoint();
                 conn_info->user_agent = connection->get_request_header("User-Agent");
-                
-                // Parse query parameters from resource
-                std::string resource = connection->get_resource();
-                parse_query_parameters(resource, conn_info->query_params);
-                
-                // Note: websocketpp doesn't provide get_request_headers(), 
-                // so we'll just store the user agent for now
-                // Individual headers can be accessed with get_request_header("Header-Name")
+                conn_info->query_params = query_params;
                 
                 m_connections[conn_id] = conn_info;
                 m_handle_to_id[hdl] = conn_id;
                 m_id_to_handle[conn_id] = hdl;
             }
             
-            // Notify handler
+            // Notify handler - only for new connections (not upgrades)
             auto handler = get_event_handler();
-            if (handler) {
+            if (handler && sid_it == query_params.end()) {
                 ConnectionInfo info(conn_id);
                 info.remote_address = connection->get_remote_endpoint();
                 info.user_agent = connection->get_request_header("User-Agent");
-                
-                std::string resource = connection->get_resource();
-                parse_query_parameters(resource, info.query_params);
+                info.query_params = query_params;
                 
                 handler->on_connection_open(info);
             }
@@ -190,7 +203,7 @@ private:
         }
     }
     
-    void on_websocket_message(wspp::connection_hdl hdl, wsserver::message_ptr msg) {
+    void on_websocket_message(connection_hdl hdl, wsserver::message_ptr msg) {
         try {
             std::string conn_id = get_connection_id(hdl);
             if (conn_id.empty()) {
@@ -200,7 +213,7 @@ private:
             
             ConnectionHandle conn_handle(conn_id);
             TransportMessage transport_msg(conn_handle, msg->get_payload(), 
-                                         msg->get_opcode() == wspp::frame::opcode::binary);
+                                         msg->get_opcode() == websocketpp::frame::opcode::binary);
             
             auto handler = get_event_handler();
             if (handler) {
@@ -213,7 +226,7 @@ private:
         }
     }
     
-    void on_websocket_close(wspp::connection_hdl hdl) {
+    void on_websocket_close(connection_hdl hdl) {
         try {
             std::string conn_id = get_connection_id(hdl);
             if (conn_id.empty()) {
@@ -245,7 +258,7 @@ private:
         return lib::uuid::uuid1();
     }
     
-    std::string get_connection_id(wspp::connection_hdl hdl) {
+    std::string get_connection_id(connection_hdl hdl) {
         std::lock_guard<std::mutex> lock(m_connections_mutex);
         auto it = m_handle_to_id.find(hdl);
         return (it != m_handle_to_id.end()) ? it->second : std::string();
@@ -290,8 +303,8 @@ private:
     
     mutable std::mutex m_connections_mutex;
     std::unordered_map<ConnectionId, std::shared_ptr<ConnectionInfo>> m_connections;
-    std::map<wspp::connection_hdl, ConnectionId, std::owner_less<wspp::connection_hdl>> m_handle_to_id;
-    std::unordered_map<ConnectionId, wspp::connection_hdl> m_id_to_handle;
+    std::map<connection_hdl, ConnectionId, std::owner_less<connection_hdl>> m_handle_to_id;
+    std::unordered_map<ConnectionId, connection_hdl> m_id_to_handle;
 };
 
 /**
