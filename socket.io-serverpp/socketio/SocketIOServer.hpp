@@ -9,6 +9,7 @@
 #include "../transport/Transport.hpp"
 #include "../transport/WebSocketTransport.hpp"
 #include "../transport/PollingTransport.hpp"
+#include "../transport/UnifiedTransport.hpp"
 #include "../engineio/EngineIOServer.hpp"
 #include <functional>
 #include <memory>
@@ -85,24 +86,33 @@ public:
 
     
     /**
-     * @brief Starts listening on specified WebSocket port
-     * @param port WebSocket port
+     * @brief Starts listening on a single port supporting both Polling and WebSocket (auto-upgrade)
+     * @param port Port for both HTTP and WebSocket
      */
     void listen(int port) {
         // Ensure initialization is complete before listening
         initialize();
         
         try {
-            // Add WebSocket transport to Engine.IO
-            auto ws_factory = std::make_unique<transport::WebSocketTransportFactory>();
-            auto ws_transport = ws_factory->create_transport(m_io_service);
-            m_engine_io_server->add_transport(std::move(ws_transport));
+            // Prefer unified transport if available; ensure shared_ptr is of the concrete type
+            auto unified_unique = transport::UnifiedTransportFactory{}.create_transport(m_io_service);
+            auto unified_raw = dynamic_cast<transport::UnifiedTransport*>(unified_unique.get());
+            std::shared_ptr<transport::Transport> unified_transport;
+            if (unified_raw) {
+                std::shared_ptr<transport::UnifiedTransport> unified_shared(unified_raw);
+                unified_unique.release();
+                unified_transport = unified_shared;
+            } else {
+                // Fallback to base shared_ptr (shouldn't happen)
+                unified_transport = std::shared_ptr<transport::Transport>(unified_unique.release());
+            }
+            m_engine_io_server->add_transport(unified_transport);
             
             // Start Engine.IO server
             m_engine_io_server->listen("0.0.0.0", port);
             m_engine_io_server->start_accept();
             
-            LOG_INFO("Socket.IO server listening on WebSocket port: ", port);
+            LOG_INFO("Socket.IO server listening (unified) on port: ", port);
             
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to start Socket.IO server: ", e.what());

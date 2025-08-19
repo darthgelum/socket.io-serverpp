@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Socket.IO v4 Client (CDN)</title>
+  <style>
+    body { font-family: system-ui, Arial; max-width: 720px; margin: 24px auto; }
+    #log { height: 280px; border: 1px solid #ccc; padding: 8px; overflow: auto; font-family: monospace; }
+    input, button { padding: 6px 10px; }
+    .row { margin: 8px 0; }
+    .status { display:inline-block; padding: 4px 8px; border-radius: 4px; margin-left: 8px; }
+    .ok { background:#e6ffed; border:1px solid #b7eb8f; }
+    .bad { background:#fff2f0; border:1px solid #ffa39e; }
+  </style>
+  <!-- Socket.IO v4 client from CDN (SRI removed to avoid mismatches) -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+  <h1>Socket.IO v4 Client</h1>
+  <p>Open this page in two tabs to see broadcasted messages.</p>
+
+  <div class="row">
+    <label>Server URL: <input id="url" value="http://localhost:9001" size="40" /></label>
+    <label style="margin-left:8px;">Namespace: <input id="nsp" value="/" size="10" /></label>
+    <button id="btnConnect">Connect</button>
+    <button id="btnDisconnect">Disconnect</button>
+    <span id="status" class="status bad">disconnected</span>
+  </div>
+
+  <div class="row">
+    <input id="msg" placeholder="message" size="50" />
+    <button id="btnSend">Send</button>
+  </div>
+
+  <h3>Log</h3>
+  <pre id="log"></pre>
+
+  <script>
+    let socket;
+    const log = (x) => { const el=document.getElementById('log'); el.textContent += x + "\n"; el.scrollTop=el.scrollHeight; };
+    const setStatus = (ok, text) => { const s=document.getElementById('status'); s.textContent=text|| (ok? 'connected':'disconnected'); s.className='status ' + (ok?'ok':'bad'); };
+
+    const doConnect = () => {
+      if (typeof io === 'undefined') { log('ERROR: Socket.IO client not loaded'); return; }
+
+      const base = document.getElementById('url').value.trim().replace(/\/$/, '');
+      const nsp  = document.getElementById('nsp').value.trim() || '/';
+      if (socket) { try { socket.close(); } catch(_){} }
+
+      // For Socket.IO, the namespace is passed as a separate parameter, not in URL
+      log(`connecting to ${base} namespace=${nsp} ...`);
+      
+      // Proper Socket.IO namespace handling
+      const socketUrl = nsp === '/' ? base : base + nsp;
+      socket = io(socketUrl, {
+        transports: ['polling', 'websocket'], // server is Polling
+        withCredentials: false,
+        // forceNew: true, // Force a new connection for namespace changes
+        autoConnect: true,
+        timeout: 20000,
+      });
+
+      // Core lifecycle
+      socket.on('connect', () => { log('✅ connect sid=' + socket.id); setStatus(true); });
+      socket.on('disconnect', (reason) => { log('🔌 disconnect: ' + reason); setStatus(false); });
+      socket.on('connect_error', (err) => { log('❗ connect_error: ' + (err?.message || err)); setStatus(false, 'connect_error'); });
+      socket.on('error', (err) => { log('❗ error: ' + err); });
+
+      // Useful diagnostics
+      socket.io.on('reconnect_attempt', (n) => log('… reconnect_attempt #' + n));
+      socket.io.on('reconnect', (n) => log('🔁 reconnected after ' + n + ' attempts'));
+      socket.io.on('reconnect_error', (e) => log('❗ reconnect_error: ' + (e?.message || e)));
+
+      // App events
+      socket.on('chat_message', (payload) => { log('💬 chat_message: ' + JSON.stringify(payload)); });
+      socket.on('welcome', (payload) => { log('💬 chat_message: welcome from server' + JSON.stringify(payload)); });
+    };
+
+    const doDisconnect = () => { if (socket) { socket.close(); socket = null; setStatus(false); log('🔌 closed by client'); } };
+    const doSend = () => { if (!socket) { log('Not connected'); return; } const v=document.getElementById('msg').value; socket.emit('chat_message', v); log('📤 emit chat_message: ' + v); };
+
+    // Wire UI events once DOM is ready
+    window.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('btnConnect').addEventListener('click', doConnect);
+      document.getElementById('btnDisconnect').addEventListener('click', doDisconnect);
+      document.getElementById('btnSend').addEventListener('click', doSend);
+      document.getElementById('msg').addEventListener('keydown', (e)=>{ if(e.key==='Enter') doSend(); });
+      log('Client ready. Socket.IO version: ' + (window.io?.version || 'not loaded'));
+    });
+  </script>
+</body>
+</html>
