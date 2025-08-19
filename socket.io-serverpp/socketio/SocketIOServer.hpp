@@ -8,6 +8,7 @@
 #include "../Message.hpp"
 #include "../transport/Transport.hpp"
 #include "../transport/WebSocketTransport.hpp"
+#include "../transport/PollingTransport.hpp"
 #include "../engineio/EngineIOServer.hpp"
 #include <functional>
 #include <memory>
@@ -107,6 +108,51 @@ public:
             LOG_ERROR("Failed to start Socket.IO server: ", e.what());
             throw SocketIOException("Failed to start Socket.IO server", 
                                   SocketIOErrorCode::CONNECTION_FAILED);
+        }
+    }
+
+    /**
+     * @brief Starts listening on WebSocket and Polling ports (separate ports for now)
+     * @param ws_port WebSocket port
+     * @param polling_port HTTP polling port
+     */
+    void listen(int ws_port, int polling_port) {
+        // Ensure initialization is complete before listening
+        initialize();
+
+        try {
+            // Add WebSocket transport
+            auto ws_unique = transport::WebSocketTransportFactory{}.create_transport(m_io_service);
+            auto ws_transport = std::shared_ptr<transport::Transport>(ws_unique.release());
+            m_engine_io_server->add_transport(ws_transport);
+
+            // Add Polling transport (construct shared_ptr with concrete type for shared_from_this)
+            auto polling_unique = transport::PollingTransportFactory{}.create_transport(m_io_service);
+            auto polling_raw = dynamic_cast<transport::PollingTransport*>(polling_unique.get());
+            std::shared_ptr<transport::Transport> polling_transport;
+            if (polling_raw) {
+                // Create shared_ptr with the exact derived type so enable_shared_from_this works
+                std::shared_ptr<transport::PollingTransport> polling_shared(polling_raw);
+                polling_unique.release();
+                polling_transport = polling_shared;
+            } else {
+                // Fallback (should not happen)
+                polling_transport = std::shared_ptr<transport::Transport>(polling_unique.release());
+            }
+            m_engine_io_server->add_transport(polling_transport);
+
+            // Listen transports on their respective ports
+            ws_transport->listen("0.0.0.0", ws_port);
+            polling_transport->listen("0.0.0.0", polling_port);
+
+            // Start accepting on all transports
+            m_engine_io_server->start_accept();
+
+            LOG_INFO("Socket.IO server listening - WS:", ws_port, ", Polling:", polling_port);
+
+        } catch (const std::exception& e) {
+            LOG_ERROR("Failed to start Socket.IO server (ws+polling): ", e.what());
+            throw SocketIOException("Failed to start Socket.IO server (ws+polling)", SocketIOErrorCode::CONNECTION_FAILED);
         }
     }
     
@@ -278,6 +324,7 @@ private:
                                 const std::string& nsp, const std::string& data) {
         switch (packet_type) {
         case socket_io::CONNECT:
+            // Accept CONNECT and send ack within handle_socket_io_connect
             handle_socket_io_connect(session_id, nsp);
             break;
             

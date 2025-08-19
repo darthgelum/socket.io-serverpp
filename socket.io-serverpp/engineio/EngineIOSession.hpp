@@ -38,9 +38,9 @@ namespace packet_type {
  */
 struct EngineIOConfig {
     int ping_interval = timeouts::DEFAULT_PING_INTERVAL;    // 25000ms
-    int ping_timeout = timeouts::DEFAULT_PING_TIMEOUT;      // 5000ms  
+    int ping_timeout = timeouts::DEFAULT_PING_TIMEOUT;      // 20000ms (v4 typical)
     int max_payload = timeouts::DEFAULT_MAX_PAYLOAD;        // 1MB
-    bool allow_upgrades = false;                            // WebSocket only for now
+    bool allow_upgrades = true;                             // advertise websocket upgrade
     
     EngineIOConfig() = default;
 };
@@ -312,11 +312,16 @@ private:
         // Build Engine.IO OPEN packet with handshake data
         std::ostringstream handshake;
         handshake << engine_io::OPEN;
-        handshake << "{\"sid\":\"" << m_session_id 
-                  << "\",\"upgrades\":[]"  // No upgrades for now (WebSocket only)
-                  << ",\"pingInterval\":" << m_config.ping_interval
-                  << ",\"pingTimeout\":" << m_config.ping_timeout
-                  << ",\"maxPayload\":" << m_config.max_payload << "}";
+        handshake << "{\"sid\":\"" << m_session_id << "\",";
+        // Advertise upgrades if allowed
+        if (m_config.allow_upgrades) {
+            handshake << "\"upgrades\":[\"websocket\"],";
+        } else {
+            handshake << "\"upgrades\":[],";
+        }
+        handshake << "\"pingInterval\":" << m_config.ping_interval << ",";
+        handshake << "\"pingTimeout\":" << m_config.ping_timeout << ",";
+        handshake << "\"maxPayload\":" << m_config.max_payload << "}";
         
         transport->send_message(m_connection, handshake.str());
         

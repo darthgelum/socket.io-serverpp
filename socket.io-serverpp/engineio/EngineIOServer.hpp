@@ -346,12 +346,14 @@ private:
     std::shared_ptr<transport::Transport> find_transport_for_connection(
         const transport::ConnectionHandle& connection) {
         std::lock_guard<std::mutex> lock(m_transports_mutex);
-        // For now, return first available transport
-        // TODO: Implement proper transport selection based on connection type
-        if (!m_transports.empty()) {
-            return m_transports[0];
+        // Prefer the transport that knows about this connection
+        for (auto& t : m_transports) {
+            if (t && t->get_connection_info(connection)) {
+                return t;
+            }
         }
-        return nullptr;
+        // Fallback: first transport if any
+        return m_transports.empty() ? nullptr : m_transports.front();
     }
     
     std::string get_session_id_for_connection(const transport::ConnectionId& connection_id) {

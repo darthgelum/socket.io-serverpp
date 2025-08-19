@@ -78,14 +78,15 @@ void SocketIOServer::handle_socket_io_connect(const std::string& session_id, con
                 session_it->second.connected_to_namespace = true;
             }
         }
-        
-        // Notify namespace
+        // First send CONNECT ack ("40") so clients see it before any events
+        {
+            std::string response_nsp = (target_nsp == "/") ? "" : target_nsp;
+            send_socket_io_message(session_id, socket_io::CONNECT, response_nsp,
+                                   std::string("{\"sid\":\"") + session_id + "\"}");
+        }
+
+        // Now notify namespace (user code may emit events like "welcome")
         socket_namespace->on_session_connect(session_id);
-        
-        // Send CONNECT response (use empty namespace in response for default namespace)
-        std::string response_nsp = (target_nsp == "/") ? "" : target_nsp;
-        send_socket_io_message(session_id, socket_io::CONNECT, response_nsp, 
-                             "{\"sid\":\"" + session_id + "\"}");
         
         LOG_DEBUG("Socket.IO CONNECT to namespace: ", target_nsp, 
                   " for session: ", session_id);
